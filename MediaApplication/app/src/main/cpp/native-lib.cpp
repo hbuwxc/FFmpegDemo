@@ -21,6 +21,9 @@ AVFilterContext *buffersink_ctx;
 AVFilterContext *buffersrc_ctx;
 AVFilterGraph *filter_graph;
 static int video_stream_index = -1;
+static bool enableCut = true;
+int64_t pts_start = -1;
+int64_t dts_start = -1;
 
 int open_input_file(const char *path);
 
@@ -80,19 +83,35 @@ Java_com_watts_myapplication_FFmpegNativeUtils_filterVideo(JNIEnv *env, jclass c
         return;
     }
 
-    int64_t start_from = 3*AV_TIME_BASE;
-    LOGE("startseek");
-    ret = av_seek_frame(ifmt_ctx, video_stream_index, start_from, AVSEEK_FLAG_ANY);
-    LOGE("end seek");
-    if (ret < 0) {
-        LOGE("Error seek: %s", av_err2str(ret));
-        return;
+    if(enableCut) {
+        ret = av_seek_frame(ifmt_ctx, -1, 5 * AV_TIME_BASE, AVSEEK_FLAG_ANY);
+        if (ret < 0) {
+            LOGE("Error seek: %s", av_err2str(ret));
+            return;
+        }
     }
-    LOGE("SEEK SEC, pts = %3" PRId64"", start_from);
     /* read all packets */
     while (1) {
         if ((ret = av_read_frame(ifmt_ctx, &packet)) < 0)
             break;
+        if (pts_start == -1){
+            pts_start = packet.pts;
+        }
+        if (dts_start == -1){
+            dts_start = packet.dts;
+        }
+        if (enableCut){
+            /* copy packet */
+            packet.pts = packet.pts - pts_start;
+            packet.dts = packet.dts - dts_start;
+            if (packet.pts < 0) {
+                packet.pts = 0;
+            }
+            if (packet.dts < 0) {
+                packet.dts = 0;
+            }
+//            packet.pos = -1;
+        }
         LOGE("read pkt, pts = %3" PRId64"", packet.pts);
         stream_index = packet.stream_index;
         if (packet.stream_index == video_stream_index) {
