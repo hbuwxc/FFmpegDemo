@@ -20,6 +20,7 @@ add_library( # Sets the name of the library.
              native-lib.cpp
             encode_video.c
         transcoding.c
+        merge_video.cpp
         )
 
 #ffmpeg library

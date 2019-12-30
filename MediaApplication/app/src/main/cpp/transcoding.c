@@ -89,7 +89,7 @@ static int open_input_file(const char *filename)
             return AVERROR(ENOMEM);
         }
         ret = avcodec_parameters_to_context(codec_ctx, stream->codecpar);
-        LOGE("nb-streams[%d]\nwidth=%d,height=%d,sample_aspect_ratio=%d/%d,pix_format = %d,timebase=%d/%d,bitrate = %d",i, codec_ctx->width,codec_ctx->height,codec_ctx->sample_aspect_ratio.den,codec_ctx->sample_aspect_ratio.num,codec_ctx->pix_fmt,codec_ctx->time_base.den,codec_ctx->time_base.num, codec_ctx->bit_rate);
+        LOGE("nb-streams[%d]\nwidth=%d,height=%d,sample_aspect_ratio=%d/%d,pix_format = %d,timebase=%d/%d,bitrate = %3" PRId64"",i, codec_ctx->width,codec_ctx->height,codec_ctx->sample_aspect_ratio.den,codec_ctx->sample_aspect_ratio.num,codec_ctx->pix_fmt,codec_ctx->time_base.den,codec_ctx->time_base.num, codec_ctx->bit_rate);
         if (ret < 0) {
             LOGE("Failed to copy decoder parameters to input decoder context "
                    "for stream #%u\n", i);
@@ -111,7 +111,7 @@ static int open_input_file(const char *filename)
     }
 
     av_dump_format(ifmt_ctx, 0, filename, 0);
-    LOGE("end-streams-------width=%d,height=%d,sample_aspect_ratio=%d/%d,pix_format = %d,timebase=%d/%d,bitrate = %d",stream_ctx[0].dec_ctx->width,stream_ctx[0].dec_ctx->height,stream_ctx[0].dec_ctx->sample_aspect_ratio.den,stream_ctx[0].dec_ctx->sample_aspect_ratio.num,stream_ctx[0].dec_ctx->pix_fmt,stream_ctx[0].dec_ctx->time_base.den,stream_ctx[0].dec_ctx->time_base.num, stream_ctx[0].dec_ctx->bit_rate);
+    LOGE("end-streams-------width=%d,height=%d,sample_aspect_ratio=%d/%d,pix_format = %d,timebase=%d/%d,bitrate = %3" PRId64"",stream_ctx[0].dec_ctx->width,stream_ctx[0].dec_ctx->height,stream_ctx[0].dec_ctx->sample_aspect_ratio.den,stream_ctx[0].dec_ctx->sample_aspect_ratio.num,stream_ctx[0].dec_ctx->pix_fmt,stream_ctx[0].dec_ctx->time_base.den,stream_ctx[0].dec_ctx->time_base.num, stream_ctx[0].dec_ctx->bit_rate);
     return 0;
 }
 

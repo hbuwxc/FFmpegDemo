@@ -88,7 +88,7 @@ Java_com_watts_myapplication_FFmpegNativeUtils_generateVideo(JNIEnv *env, jclass
     /* find the mpeg1video encoder */
     codec = avcodec_find_encoder(AV_CODEC_ID_MPEG4);
     if (!codec) {
-        fprintf(stderr, "Codec '%s' not found\n", AV_CODEC_ID_MPEG4);
+        fprintf(stderr, "Codec '%d' not found\n", AV_CODEC_ID_MPEG4);
         exit(1);
     }
 

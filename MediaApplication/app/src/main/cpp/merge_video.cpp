@@ -1,3 +1,7 @@
+//
+// Created by wxc on 2019-12-26.
+//
+
 #include <jni.h>
 #include <string>
 #include <android/log.h>
@@ -13,114 +17,64 @@ extern "C" {
 
 #define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, "MEDIA_CORE", __VA_ARGS__)
 
-static AVFormatContext *ifmt_ctx;
+static AVFormatContext *ifmt_ctx1;
+static AVFormatContext *ifmt_ctx2;
 static AVFormatContext *ofmt_ctx;
-static AVCodecContext *decCtx;
+static AVCodecContext *decCtx1;
 static AVCodecContext *encCtx;
-AVFilterContext *buffersink_ctx;
-AVFilterContext *buffersrc_ctx;
-AVFilterGraph *filter_graph;
-static int video_stream_index = -1;
-static bool enableCut = true;
-int64_t pts_start = -1;
-int64_t dts_start = -1;
+static AVCodecContext *decCtx2;
 
-int open_input_file(const char *path);
+AVFilterContext *buffersink_ctx_merge;
+AVFilterContext *buffersrc_ctx_merge;
+AVFilterGraph *filter_graph_merge;
 
-int open_output_file(const char *path);
-
-int init_filters(const char *descr);
-
-void encode_write_frame(AVFrame *inputFrame, unsigned int stream_index, int *got_frame);
-
-void encode(AVCodecContext *enc_ctx, AVFrame *frame, AVPacket *pkt,
-                   FILE *outfile)
-;
-
-extern "C" JNIEXPORT jstring JNICALL
-Java_com_watts_myapplication_MainActivity_stringFromJNI(
-        JNIEnv* env,
-        jobject /* this */) {
-    std::string hello = "Hello from C++";
-    LOGE("this is ndk log.---%s",avcodec_configuration());
+static int video_stream_index1 = -1;
+static int video_stream_index2 = -1;
 
 
-    return env->NewStringUTF(hello.c_str());
-}
+int open_input_file(const char *video1, const char *video2);
+int open_output_file2(const char *video);
+int init_filters_merge(const char *descr);
+void encode_write_frame(AVFrame *inputFrame, unsigned int stream_index, int *got_frame, int64_t baseTs);
 
-extern "C"
-JNIEXPORT void JNICALL
-Java_com_watts_myapplication_FFmpegNativeUtils_filterVideo(JNIEnv *env, jclass clazz,
-                                                           jstring video_path, jstring filter_path, jstring filter) {
-    int ret;
+extern "C" JNIEXPORT void JNICALL
+Java_com_watts_myapplication_FFmpegNativeUtils_mergeVideo(JNIEnv *env, jclass clazz,
+        jstring video_path1, jstring video_path2,
+        jstring output_video, jstring filter) {
+    int ret = -1;
     AVPacket packet;
     AVFrame *frame;
     AVFrame *filt_frame;
     int stream_index;
+    int64_t endPts = 0;
+    int64_t endDts = 0;
 
-    const char *filePath = env->GetStringUTFChars(video_path, 0);
-    const char *filterPath = env->GetStringUTFChars(filter_path, 0);
+    const char *video1 = env->GetStringUTFChars(video_path1, 0);
+    const char *video2 = env->GetStringUTFChars(video_path2, 0);
+    const char *outputVideo = env->GetStringUTFChars(output_video, 0);
     const char *filterGraph = env->GetStringUTFChars(filter, 0);
-    LOGE("get file path = %s", filePath);
 
-//    if (!frame || !filt_frame) {
-//        LOGE("Could not allocate frame");
-//        return;
-//    }
-
-    if ((ret = open_input_file(filePath)) < 0){
-        LOGE("open file failed,");
-        return;
+    if (open_input_file(video1, video2) < 0){
+        LOGE("FILE OPEN FAILED");
     }
 
-    if ((ret = open_output_file(filterPath)) < 0){
+    if ((open_output_file2(outputVideo)) < 0){
         LOGE("open output file failed,");
         return;
     }
 
-    if ((ret = init_filters(filterGraph)) < 0){
+    if ((init_filters_merge(filterGraph)) < 0){
         LOGE("init filters failed,");
         return;
     }
-
-    if(enableCut) {
-        ret = av_seek_frame(ifmt_ctx, -1, 5 * AV_TIME_BASE, AVSEEK_FLAG_ANY);
-        if (ret < 0) {
-            LOGE("Error seek: %s", av_err2str(ret));
-            return;
-        }
-    }
     /* read all packets */
     while (1) {
-        if ((ret = av_read_frame(ifmt_ctx, &packet)) < 0)
+        if ((ret = av_read_frame(ifmt_ctx1, &packet)) < 0)
             break;
-        if (enableCut){
-            if (pts_start == -1){
-                pts_start = packet.pts;
-            }
-            if (dts_start == -1){
-                dts_start = packet.dts;
-            }
-
-            /* copy packet */
-            packet.pts = packet.pts - pts_start;
-            packet.dts = packet.dts - dts_start;
-            if (packet.pts < 0) {
-                packet.pts = 0;
-            }
-            if (packet.dts < 0) {
-                packet.dts = 0;
-            }
-//            packet.pos = -1;
-        }
         LOGE("read pkt, pts = %3" PRId64"", packet.pts);
         stream_index = packet.stream_index;
-        if (packet.stream_index == video_stream_index) {
-//            LOGE("first scale from %d/%d to %d/%d",ifmt_ctx->streams[stream_index]->time_base.num,ifmt_ctx->streams[stream_index]->time_base.den,decCtx->time_base.num,decCtx->time_base.den);
-//            av_packet_rescale_ts(&packet,
-//                                 ifmt_ctx->streams[stream_index]->time_base,
-//                                 decCtx->time_base);
-            ret = avcodec_send_packet(decCtx, &packet);
+        if (packet.stream_index == video_stream_index1) {
+            ret = avcodec_send_packet(decCtx1, &packet);
             if (ret < 0) {
                 LOGE("Error while sending a packet to the decoder\n");
                 break;
@@ -128,18 +82,18 @@ Java_com_watts_myapplication_FFmpegNativeUtils_filterVideo(JNIEnv *env, jclass c
 
             while (ret >= 0) {
                 frame = av_frame_alloc();
-                ret = avcodec_receive_frame(decCtx, frame);
-                LOGE("GOT FRAME ,pts = %3" PRId64" - %d/%d" ,frame->pts, decCtx->time_base.den, decCtx->time_base.num);
+                ret = avcodec_receive_frame(decCtx1, frame);
+                LOGE("GOT FRAME ,pts = %3" PRId64" - %d/%d" ,frame->pts, decCtx1->time_base.den, decCtx1->time_base.num);
                 if (ret == AVERROR(EAGAIN) || ret == AVERROR_EOF) {
                     break;
                 } else if (ret < 0) {
                     LOGE("Error while receiving a frame from the decoder\n");
                     goto end;
                 }
-                LOGE("START FRAME filter_graph, pts = %3" PRId64", beset effort ts = %3" PRId64"", frame->pts, frame->best_effort_timestamp);
+                LOGE("START FRAME filter_graph_merge, pts = %3" PRId64", beset effort ts = %3" PRId64"", frame->pts, frame->best_effort_timestamp);
                 frame->pts = frame->best_effort_timestamp;
                 /* push the decoded frame into the filtergraph */
-                if (av_buffersrc_add_frame_flags(buffersrc_ctx, frame, AV_BUFFERSRC_FLAG_KEEP_REF) < 0) {
+                if (av_buffersrc_add_frame_flags(buffersrc_ctx_merge, frame, AV_BUFFERSRC_FLAG_KEEP_REF) < 0) {
                     LOGE("Error while feeding the filtergraph\n");
                     break;
                 }
@@ -147,14 +101,71 @@ Java_com_watts_myapplication_FFmpegNativeUtils_filterVideo(JNIEnv *env, jclass c
                 /* pull filtered frames from the filtergraph */
                 while (1) {
                     filt_frame = av_frame_alloc();
-                    ret = av_buffersink_get_frame(buffersink_ctx, filt_frame);
-                    LOGE("RECEIVE FRAME filter_graph ,ret = %d，%d,%d", ret, AVERROR(EAGAIN), AVERROR_EOF);
+                    ret = av_buffersink_get_frame(buffersink_ctx_merge, filt_frame);
+                    LOGE("RECEIVE FRAME filter_graph_merge ,ret = %d，%d,%d", ret, AVERROR(EAGAIN), AVERROR_EOF);
                     if (ret == AVERROR(EAGAIN) || ret == AVERROR_EOF)
                         break;
                     if (ret < 0)
                         goto end;
                     filt_frame->pict_type = AV_PICTURE_TYPE_NONE;
-                    encode_write_frame(filt_frame, stream_index, NULL);
+                    encode_write_frame(filt_frame, stream_index, NULL, 0);
+                    av_frame_unref(filt_frame);
+                }
+                endPts = frame->pts;
+                endDts = packet.dts;
+                av_frame_unref(frame);
+            }
+        }
+        av_packet_unref(&packet);
+    }
+    LOGE("FINISH FILE 1 , START FILE 2 ----------------------------------------------");
+    // read second video
+    while (1) {
+        if ((ret = av_read_frame(ifmt_ctx2, &packet)) < 0)
+            break;
+        LOGE("read pkt, pts = %3" PRId64", new pts = %3" PRId64"， end pts = %3" PRId64"", packet.pts, (endPts + packet.pts));
+        //跨过一个timebase , 避免冲突失败
+        packet.pts = endPts + packet.pts + 1;
+//        packet.dts = endDts + packet.dts;
+        stream_index = packet.stream_index;
+        if (packet.stream_index == video_stream_index2) {
+            ret = avcodec_send_packet(decCtx2, &packet);
+            if (ret < 0) {
+                LOGE("Error while sending a packet to the decoder\n");
+                break;
+            }
+
+            while (ret >= 0) {
+                frame = av_frame_alloc();
+                ret = avcodec_receive_frame(decCtx2, frame);
+                LOGE("GOT FRAME ,pts = %3" PRId64" - %d/%d" ,frame->pts, decCtx2->time_base.den, decCtx2->time_base.num);
+                if (ret == AVERROR(EAGAIN) || ret == AVERROR_EOF) {
+                    break;
+                } else if (ret < 0) {
+                    LOGE("Error while receiving a frame from the decoder\n");
+                    goto end;
+                }
+                LOGE("START FRAME filter_graph_merge, pts = %3" PRId64", beset effort ts = %3" PRId64"", frame->pts, frame->best_effort_timestamp);
+//                frame->pts = frame->best_effort_timestamp;
+                /* push the decoded frame into the filtergraph */
+                if (av_buffersrc_add_frame_flags(buffersrc_ctx_merge, frame, AV_BUFFERSRC_FLAG_KEEP_REF) < 0) {
+                    LOGE("Error while feeding the filtergraph\n");
+                    break;
+                }
+
+                /* pull filtered frames from the filtergraph */
+                while (1) {
+                    filt_frame = av_frame_alloc();
+                    ret = av_buffersink_get_frame(buffersink_ctx_merge, filt_frame);
+                    if (ret == AVERROR(EAGAIN) || ret == AVERROR_EOF)
+                        break;
+                    if (ret < 0)
+                        goto end;
+                    filt_frame->pict_type = AV_PICTURE_TYPE_NONE;
+//                    filt_frame->pts = endPts + filt_frame->pts;
+                    LOGE("RECEIVE FRAME filter_graph_merge ,pts = %3" PRId64"", filt_frame->pts);
+//                    filt_frame->pkt_dts = endPts + filt_frame->pkt_dts;
+                    encode_write_frame(filt_frame, stream_index, NULL, endPts);
                     av_frame_unref(filt_frame);
                 }
                 av_frame_unref(frame);
@@ -162,12 +173,16 @@ Java_com_watts_myapplication_FFmpegNativeUtils_filterVideo(JNIEnv *env, jclass c
         }
         av_packet_unref(&packet);
     }
+    LOGE("FINISH 2 FILE ");
+
     av_write_trailer(ofmt_ctx);
 
     end:
-    avfilter_graph_free(&filter_graph);
-    avcodec_free_context(&decCtx);
-    avformat_close_input(&ifmt_ctx);
+    avfilter_graph_free(&filter_graph_merge);
+    avcodec_free_context(&decCtx1);
+    avformat_close_input(&ifmt_ctx1);
+    avcodec_free_context(&decCtx2);
+    avformat_close_input(&ifmt_ctx2);
     av_frame_free(&frame);
     av_frame_free(&filt_frame);
 
@@ -178,53 +193,82 @@ Java_com_watts_myapplication_FFmpegNativeUtils_filterVideo(JNIEnv *env, jclass c
     LOGE("SUCCESS ALL");
 }
 
-
-int open_input_file(const char *filename)
+int open_input_file(const char *filename1, const char *filename2)
 {
     int ret;
     AVCodec *dec;
 
-    if ((ret = avformat_open_input(&ifmt_ctx, filename, NULL, NULL)) < 0) {
+    if ((ret = avformat_open_input(&ifmt_ctx1, filename1, NULL, NULL)) < 0) {
         LOGE("Cannot open input file\n");
         return ret;
     }
 
-    if ((ret = avformat_find_stream_info(ifmt_ctx, NULL)) < 0) {
+    if ((ret = avformat_find_stream_info(ifmt_ctx1, NULL)) < 0) {
         LOGE("Cannot find stream information\n");
         return ret;
     }
 
     /* select the video stream */
-    ret = av_find_best_stream(ifmt_ctx, AVMEDIA_TYPE_VIDEO, -1, -1, &dec, 0);
+    ret = av_find_best_stream(ifmt_ctx1, AVMEDIA_TYPE_VIDEO, -1, -1, &dec, 0);
     if (ret < 0) {
         LOGE("Cannot find a video stream in the input file\n");
         return ret;
     }
-    video_stream_index = ret;
+    video_stream_index1 = ret;
 
     /* create decoding context */
-    decCtx = avcodec_alloc_context3(dec);
-    if (!decCtx)
+    decCtx1 = avcodec_alloc_context3(dec);
+    if (!decCtx1)
         return AVERROR(ENOMEM);
-    avcodec_parameters_to_context(decCtx, ifmt_ctx->streams[video_stream_index]->codecpar);
-    decCtx->framerate = av_guess_frame_rate(ifmt_ctx, ifmt_ctx->streams[video_stream_index], NULL);
+    avcodec_parameters_to_context(decCtx1, ifmt_ctx1->streams[video_stream_index1]->codecpar);
+    decCtx1->framerate = av_guess_frame_rate(ifmt_ctx1, ifmt_ctx1->streams[video_stream_index1], NULL);
 
     /* init the video decoder */
-    if ((ret = avcodec_open2(decCtx, dec, NULL)) < 0) {
+    if ((ret = avcodec_open2(decCtx1, dec, NULL)) < 0) {
         LOGE("Cannot open video decoder\n");
         return ret;
     }
-    av_dump_format(ifmt_ctx, 0, filename, 0);
+    av_dump_format(ifmt_ctx1, 0, filename1, 0);
+
+    if ((ret = avformat_open_input(&ifmt_ctx2, filename2, NULL, NULL)) < 0) {
+        LOGE("Cannot open input file\n");
+        return ret;
+    }
+
+    if ((ret = avformat_find_stream_info(ifmt_ctx2, NULL)) < 0) {
+        LOGE("Cannot find stream information\n");
+        return ret;
+    }
+
+    /* select the video stream */
+    ret = av_find_best_stream(ifmt_ctx2, AVMEDIA_TYPE_VIDEO, -1, -1, &dec, 0);
+    if (ret < 0) {
+        LOGE("Cannot find a video stream in the input file\n");
+        return ret;
+    }
+    video_stream_index2 = ret;
+
+    /* create decoding context */
+    decCtx2 = avcodec_alloc_context3(dec);
+    if (!decCtx2)
+        return AVERROR(ENOMEM);
+    avcodec_parameters_to_context(decCtx2, ifmt_ctx2->streams[video_stream_index2]->codecpar);
+    decCtx2->framerate = av_guess_frame_rate(ifmt_ctx2, ifmt_ctx2->streams[video_stream_index2], NULL);
+
+    /* init the video decoder */
+    if ((ret = avcodec_open2(decCtx2, dec, NULL)) < 0) {
+        LOGE("Cannot open video decoder\n");
+        return ret;
+    }
+    av_dump_format(ifmt_ctx2, 0, filename2, 0);
     LOGE("FINISH OPEN INPUT FILE");
     return 0;
 }
 
-
-int open_output_file(const char *filename)
-{
+int open_output_file2(const char *filename){
     AVStream *out_stream;
     AVStream *in_stream;
-    AVCodecContext *dec_ctx, *enc_ctx;
+    AVCodecContext *enc_ctx;
     AVCodec *encoder;
     int ret;
     unsigned int i;
@@ -232,22 +276,21 @@ int open_output_file(const char *filename)
     ofmt_ctx = NULL;
     avformat_alloc_output_context2(&ofmt_ctx, NULL, NULL, filename);
     if (!ofmt_ctx) {
-        LOGE("Could not create output context\n -- %d",ifmt_ctx->nb_streams);
+        LOGE("Could not create output context\n");
         return AVERROR_UNKNOWN;
     }
 
-    for (i = 0; i < ifmt_ctx->nb_streams; i++) {
+    for (i = 0; i < ifmt_ctx1->nb_streams; i++) {
         out_stream = avformat_new_stream(ofmt_ctx, NULL);
         if (!out_stream) {
             LOGE("Failed allocating output stream\n");
             return AVERROR_UNKNOWN;
         }
 
-        in_stream = ifmt_ctx->streams[i];
-        dec_ctx = decCtx;
+        in_stream = ifmt_ctx1->streams[i];
 
-        if (dec_ctx->codec_type == AVMEDIA_TYPE_VIDEO
-            || dec_ctx->codec_type == AVMEDIA_TYPE_AUDIO) {
+        if (decCtx1->codec_type == AVMEDIA_TYPE_VIDEO
+            || decCtx1->codec_type == AVMEDIA_TYPE_AUDIO) {
             /* in this example, we choose transcoding to same codec */
             encoder = avcodec_find_encoder(AV_CODEC_ID_MPEG4);
             if (!encoder) {
@@ -263,23 +306,23 @@ int open_output_file(const char *filename)
             /* In this example, we transcode to same properties (picture size,
              * sample rate etc.). These properties can be changed for output
              * streams easily using filters */
-            if (dec_ctx->codec_type == AVMEDIA_TYPE_VIDEO) {
-                enc_ctx->height = dec_ctx->height;
-                enc_ctx->width = dec_ctx->width;
-                enc_ctx->sample_aspect_ratio = dec_ctx->sample_aspect_ratio;
+            if (decCtx1->codec_type == AVMEDIA_TYPE_VIDEO) {
+                enc_ctx->height = decCtx1->height;
+                enc_ctx->width = decCtx1->width;
+                enc_ctx->sample_aspect_ratio = decCtx1->sample_aspect_ratio;
                 /* take first format from list of supported formats */
                 if (encoder->pix_fmts)
                     enc_ctx->pix_fmt = encoder->pix_fmts[0];
                 else
-                    enc_ctx->pix_fmt = dec_ctx->pix_fmt;
+                    enc_ctx->pix_fmt = decCtx1->pix_fmt;
                 /* video time_base can be set to whatever is handy and supported by encoder */
                 /* frames per second */
-                enc_ctx->time_base = av_inv_q(dec_ctx->framerate);
+                enc_ctx->time_base = av_inv_q(decCtx1->framerate);
 //                enc_ctx->framerate = dec_ctx->framerate;
 //                enc_ctx->bit_rate = dec_ctx->bit_rate;
             } else {
-                enc_ctx->sample_rate = dec_ctx->sample_rate;
-                enc_ctx->channel_layout = dec_ctx->channel_layout;
+                enc_ctx->sample_rate = decCtx1->sample_rate;
+                enc_ctx->channel_layout = decCtx1->channel_layout;
                 enc_ctx->channels = av_get_channel_layout_nb_channels(enc_ctx->channel_layout);
                 /* take first format from list of supported formats */
                 enc_ctx->sample_fmt = encoder->sample_fmts[0];
@@ -303,7 +346,7 @@ int open_output_file(const char *filename)
 
             out_stream->time_base = enc_ctx->time_base;
             encCtx = enc_ctx;
-        } else if (dec_ctx->codec_type == AVMEDIA_TYPE_UNKNOWN) {
+        } else if (decCtx1->codec_type == AVMEDIA_TYPE_UNKNOWN) {
             LOGE("Elementary stream #%d is of unknown type, cannot proceed\n", i);
             return AVERROR_INVALIDDATA;
         } else {
@@ -337,7 +380,9 @@ int open_output_file(const char *filename)
     return 0;
 }
 
-int init_filters(const char *filters_descr)
+//use one filter, If for different video, we may use different filter, This is just for Test.
+//In some case , Wo may don't need decode/encode video for merging.
+int init_filters_merge(const char *filters_descr)
 {
     char args[512];
     int ret = 0;
@@ -345,11 +390,11 @@ int init_filters(const char *filters_descr)
     const AVFilter *buffersink = avfilter_get_by_name("buffersink");
     AVFilterInOut *outputs = avfilter_inout_alloc();
     AVFilterInOut *inputs  = avfilter_inout_alloc();
-    AVRational time_base = ifmt_ctx->streams[video_stream_index]->time_base;
+    AVRational time_base = ifmt_ctx1->streams[video_stream_index1]->time_base;
     enum AVPixelFormat pix_fmts[] = { AV_PIX_FMT_GRAY8, AV_PIX_FMT_NONE };
 
-    filter_graph = avfilter_graph_alloc();
-    if (!outputs || !inputs || !filter_graph) {
+    filter_graph_merge = avfilter_graph_alloc();
+    if (!outputs || !inputs || !filter_graph_merge) {
         ret = AVERROR(ENOMEM);
         goto end;
     }
@@ -357,28 +402,28 @@ int init_filters(const char *filters_descr)
     /* buffer video source: the decoded frames from the decoder will be inserted here. */
     snprintf(args, sizeof(args),
              "video_size=%dx%d:pix_fmt=%d:time_base=%d/%d:pixel_aspect=%d/%d",
-             decCtx->width, decCtx->height, decCtx->pix_fmt,
+             decCtx1->width, decCtx1->height, decCtx1->pix_fmt,
              time_base.num, time_base.den,
-             decCtx->sample_aspect_ratio.num, decCtx->sample_aspect_ratio.den);
+             decCtx1->sample_aspect_ratio.num, decCtx1->sample_aspect_ratio.den);
 
-    ret = avfilter_graph_create_filter(&buffersrc_ctx, buffersrc, "in",
-                                       args, NULL, filter_graph);
+    ret = avfilter_graph_create_filter(&buffersrc_ctx_merge, buffersrc, "in",
+                                       args, NULL, filter_graph_merge);
     if (ret < 0) {
         LOGE("Cannot create buffer source\n");
         goto end;
     }
 
     /* buffer video sink: to terminate the filter chain. */
-    ret = avfilter_graph_create_filter(&buffersink_ctx, buffersink, "out",
-                                       NULL, NULL, filter_graph);
+    ret = avfilter_graph_create_filter(&buffersink_ctx_merge, buffersink, "out",
+                                       NULL, NULL, filter_graph_merge);
     if (ret < 0) {
         LOGE("Cannot create buffer sink\n");
         goto end;
     }
 
-//    ret = av_opt_set_int_list(buffersink_ctx, "pix_fmts", pix_fmts,
+//    ret = av_opt_set_int_list(buffersink_ctx_merge, "pix_fmts", pix_fmts,
 //                              AV_PIX_FMT_NONE, AV_OPT_SEARCH_CHILDREN);
-    ret = av_opt_set_bin(buffersink_ctx, "pix_fmts",
+    ret = av_opt_set_bin(buffersink_ctx_merge, "pix_fmts",
                          (uint8_t*)&encCtx->pix_fmt, sizeof(encCtx->pix_fmt),
                          AV_OPT_SEARCH_CHILDREN);
 
@@ -388,7 +433,7 @@ int init_filters(const char *filters_descr)
     }
 
     /*
-     * Set the endpoints for the filter graph. The filter_graph will
+     * Set the endpoints for the filter graph. The filter_graph_merge will
      * be linked to the graph described by filters_descr.
      */
 
@@ -399,7 +444,7 @@ int init_filters(const char *filters_descr)
      * default.
      */
     outputs->name       = av_strdup("in");
-    outputs->filter_ctx = buffersrc_ctx;
+    outputs->filter_ctx = buffersrc_ctx_merge;
     outputs->pad_idx    = 0;
     outputs->next       = NULL;
 
@@ -410,15 +455,15 @@ int init_filters(const char *filters_descr)
      * default.
      */
     inputs->name       = av_strdup("out");
-    inputs->filter_ctx = buffersink_ctx;
+    inputs->filter_ctx = buffersink_ctx_merge;
     inputs->pad_idx    = 0;
     inputs->next       = NULL;
 
-    if ((ret = avfilter_graph_parse_ptr(filter_graph, filters_descr,
+    if ((ret = avfilter_graph_parse_ptr(filter_graph_merge, filters_descr,
                                         &inputs, &outputs, NULL)) < 0)
         goto end;
 
-    if ((ret = avfilter_graph_config(filter_graph, NULL)) < 0)
+    if ((ret = avfilter_graph_config(filter_graph_merge, NULL)) < 0)
         goto end;
 
     end:
@@ -429,18 +474,23 @@ int init_filters(const char *filters_descr)
     return ret;
 }
 
-void encode_write_frame(AVFrame *inputFrame, unsigned int stream_index, int *got_frame){
+void encode_write_frame(AVFrame *inputFrame, unsigned int stream_index, int *got_frame, int64_t baseTs){
     int ret;
     AVPacket *pkt;
 
 
     pkt = av_packet_alloc();
-    if (!pkt)
+    if (!pkt) {
+        LOGE("PKT is null return");
         return;
-    LOGE("START FRAME ENCODE pts = %3" PRId64" - %d/%d",inputFrame->pts, decCtx->time_base.den, decCtx->time_base.num);
+    }
     ret = avcodec_send_frame(encCtx, inputFrame);
+    if (ret < 0){
+        LOGE("encode frame fail --- error = %s", av_err2str(ret));
+    }
     while (ret >= 0) {
         ret = avcodec_receive_packet(encCtx, pkt);
+        LOGE("get PACKET");
         if (ret == AVERROR(EAGAIN) || ret == AVERROR_EOF) {
             LOGE("Error during encoding %s",av_err2str(ret));
             return;
@@ -456,6 +506,10 @@ void encode_write_frame(AVFrame *inputFrame, unsigned int stream_index, int *got
 //                             encCtx->time_base,
 //                             ofmt_ctx->streams[stream_index]->time_base);
 //        LOGE("START WRITE PACKAGE pts = %3" PRId64" - %d/%d",pkt->pts, ofmt_ctx->streams[stream_index]->time_base.den, ofmt_ctx->streams[stream_index]->time_base.num);
+
+//        pkt->pts = baseTs + pkt->pts;
+//        pkt->dts = baseTs + pkt->dts;
+        LOGE("write pkt pts = %3" PRId64"",pkt->pts);
         ret = av_interleaved_write_frame(ofmt_ctx, pkt);
         if(ret < 0){
             LOGE("write pkt fail\n");

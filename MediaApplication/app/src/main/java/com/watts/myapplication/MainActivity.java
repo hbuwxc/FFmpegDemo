@@ -41,6 +41,7 @@ public class MainActivity extends AppCompatActivity {
     String demoVideoPath;
     String filterVideoPath;
     String filterImagePath;
+    String mergeOutputPath;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -62,6 +63,7 @@ public class MainActivity extends AppCompatActivity {
         demoVideoPath = Environment.getExternalStorageDirectory().getAbsolutePath() + File.separator + "/111/base.mp4";
         filterVideoPath = Environment.getExternalStorageDirectory().getAbsolutePath() + File.separator + "/111/filter_video.mp4";
         filterImagePath = Environment.getExternalStorageDirectory().getAbsolutePath() + File.separator + "/111/test.png";
+        mergeOutputPath = Environment.getExternalStorageDirectory().getAbsolutePath() + File.separator + "/111/merge_output.mp4";
         File f = new File(demoVideoPath);
         if (!f.exists()) {
             copyAssets(this, "demo2.mp4", demoVideoPath);
@@ -72,21 +74,7 @@ public class MainActivity extends AppCompatActivity {
             copyAssets(this, "test.png", filterImagePath);
         }
 
-        File filterFile = new File(filterVideoPath);
-        if (filterFile.exists()){
-            filterFile.delete();
-            try {
-                filterFile.createNewFile();
-            } catch (IOException e) {
-                e.printStackTrace();
-            }
-        } else {
-            try {
-                filterFile.createNewFile();
-            } catch (IOException e) {
-                e.printStackTrace();
-            }
-        }
+        createNewFile(mergeOutputPath);
 
         mVideoView.setVideoPath(demoVideoPath);
         mVideoView.setMediaController(new MediaController(this));
@@ -126,6 +114,24 @@ public class MainActivity extends AppCompatActivity {
         }
     }
 
+    private void createNewFile(String path){
+        File filterFile = new File(path);
+        if (filterFile.exists()){
+            filterFile.delete();
+            try {
+                filterFile.createNewFile();
+            } catch (IOException e) {
+                e.printStackTrace();
+            }
+        } else {
+            try {
+                filterFile.createNewFile();
+            } catch (IOException e) {
+                e.printStackTrace();
+            }
+        }
+    }
+
     /**
      * A native method that is implemented by the 'native-lib' native library,
      * which is packaged with this application.
@@ -145,13 +151,14 @@ public class MainActivity extends AppCompatActivity {
         new Thread(new Runnable() {
             @Override
             public void run() {
-                FFmpegNativeUtils.filterVideo(demoVideoPath, filterVideoPath, generateFilterGraph());
+                createNewFile(filterVideoPath);
+                FFmpegNativeUtils.filterVideo(demoVideoPath, filterVideoPath, generateFilterGraph(5));
             }
         }).start();
     }
 
-    private String generateFilterGraph(){
-        return "movie="+filterImagePath+"[wm];[in][wm]overlay=5:5[out]";
+    private String generateFilterGraph(int location){
+        return "movie="+filterImagePath+"[wm];[in][wm]overlay=5:"+location+"[out]";
     }
 
     public void generateVideo(View view) {
@@ -160,5 +167,10 @@ public class MainActivity extends AppCompatActivity {
 
     public void transcodeVideo(View view) {
         FFmpegNativeUtils.transcodeVideo(demoVideoPath, filterVideoPath);
+    }
+
+    public void mergeVideo(View view) {
+        FFmpegNativeUtils.mergeVideo(demoVideoPath, filterVideoPath, mergeOutputPath, generateFilterGraph(100));
+
     }
 }
