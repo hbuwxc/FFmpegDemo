@@ -31,6 +31,7 @@ public class MainActivity extends AppCompatActivity {
     static {
         System.loadLibrary("avcodec");
         System.loadLibrary("avfilter");
+        System.loadLibrary("postproc");
         System.loadLibrary("avutil");
         System.loadLibrary("swresample");
         System.loadLibrary("swscale");
@@ -66,7 +67,7 @@ public class MainActivity extends AppCompatActivity {
         mergeOutputPath = Environment.getExternalStorageDirectory().getAbsolutePath() + File.separator + "/111/merge_output.mp4";
         File f = new File(demoVideoPath);
         if (!f.exists()) {
-            copyAssets(this, "demo2.mp4", demoVideoPath);
+            copyAssets(this, "demo.mp4", demoVideoPath);
         }
 
         File imageFile = new File(filterImagePath);
