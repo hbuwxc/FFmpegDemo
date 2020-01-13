@@ -139,7 +139,6 @@ Java_com_watts_myapplication_FFmpegNativeUtils_filterVideo(JNIEnv *env, jclass c
                     LOGE("Error while receiving a frame from the decoder\n");
                     goto end;
                 }
-                LOGE("START FRAME filter_graph, pts = %3" PRId64", beset effort ts = %3" PRId64"", frame->pts, frame->best_effort_timestamp);
                 frame->pts = frame->best_effort_timestamp;
                 /* push the decoded frame into the filtergraph */
                 if (av_buffersrc_add_frame_flags(buffersrc_ctx, frame, AV_BUFFERSRC_FLAG_KEEP_REF) < 0) {
@@ -151,7 +150,6 @@ Java_com_watts_myapplication_FFmpegNativeUtils_filterVideo(JNIEnv *env, jclass c
                 while (1) {
                     filt_frame = av_frame_alloc();
                     ret = av_buffersink_get_frame(buffersink_ctx, filt_frame);
-                    LOGE("RECEIVE FRAME filter_graph ,ret = %d，pts=%3" PRId64"", ret, filt_frame->pts);
                     if (ret == AVERROR(EAGAIN) || ret == AVERROR_EOF)
                         break;
                     if (ret < 0)
@@ -468,7 +466,7 @@ void encode_write_frame(AVFrame *inputFrame, unsigned int stream_index, int *got
         av_packet_rescale_ts(pkt,
                              ifmt_ctx->streams[video_stream_index]->time_base,
                              ofmt_ctx->streams[stream_index]->time_base);
-        LOGE("START WRITE PACKET,  pts = %3" PRId64" ，pkt.pts seconds = %d", pkt->pts, pkt->pts * av_q2d(ofmt_ctx->streams[stream_index]->time_base));
+        LOGE("START WRITE PACKET,  pts = %3" PRId64" ，pkt.pts seconds = %f", pkt->pts, pkt->pts * av_q2d(ofmt_ctx->streams[stream_index]->time_base));
         ret = av_interleaved_write_frame(ofmt_ctx, pkt);
         if(ret < 0){
             LOGE("write pkt fail\n");

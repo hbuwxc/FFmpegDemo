@@ -35,7 +35,7 @@ static int video_stream_index2 = -1;
 int open_input_file(const char *video1, const char *video2);
 int open_output_file2(const char *video);
 int init_filters_merge(const char *descr);
-void encode_write_frame(AVFrame *inputFrame, unsigned int stream_index, int *got_frame, int64_t baseTs);
+void encode_write_frame(AVFrame *inputFrame, unsigned int stream_index, int *got_frame, int64_t baseTs, AVRational fromTB);
 
 extern "C" JNIEXPORT void JNICALL
 Java_com_watts_myapplication_FFmpegNativeUtils_mergeVideo(JNIEnv *env, jclass clazz,
@@ -90,7 +90,6 @@ Java_com_watts_myapplication_FFmpegNativeUtils_mergeVideo(JNIEnv *env, jclass cl
                     LOGE("Error while receiving a frame from the decoder\n");
                     goto end;
                 }
-                LOGE("START FRAME filter_graph_merge, pts = %3" PRId64", beset effort ts = %3" PRId64"", frame->pts, frame->best_effort_timestamp);
                 frame->pts = frame->best_effort_timestamp;
                 /* push the decoded frame into the filtergraph */
                 if (av_buffersrc_add_frame_flags(buffersrc_ctx_merge, frame, AV_BUFFERSRC_FLAG_KEEP_REF) < 0) {
@@ -102,13 +101,12 @@ Java_com_watts_myapplication_FFmpegNativeUtils_mergeVideo(JNIEnv *env, jclass cl
                 while (1) {
                     filt_frame = av_frame_alloc();
                     ret = av_buffersink_get_frame(buffersink_ctx_merge, filt_frame);
-                    LOGE("RECEIVE FRAME filter_graph_merge ,ret = %d，%d,%d", ret, AVERROR(EAGAIN), AVERROR_EOF);
                     if (ret == AVERROR(EAGAIN) || ret == AVERROR_EOF)
                         break;
                     if (ret < 0)
                         goto end;
                     filt_frame->pict_type = AV_PICTURE_TYPE_NONE;
-                    encode_write_frame(filt_frame, stream_index, NULL, 0);
+                    encode_write_frame(filt_frame, stream_index, NULL, 0, ifmt_ctx1->streams[video_stream_index1]->time_base);
                     av_frame_unref(filt_frame);
                 }
                 endPts = frame->pts;
@@ -123,9 +121,10 @@ Java_com_watts_myapplication_FFmpegNativeUtils_mergeVideo(JNIEnv *env, jclass cl
     while (1) {
         if ((ret = av_read_frame(ifmt_ctx2, &packet)) < 0)
             break;
-        LOGE("read pkt, pts = %3" PRId64", new pts = %3" PRId64"， end pts = %3" PRId64"", packet.pts, (endPts + packet.pts));
         //跨过一个timebase , 避免冲突失败
-        packet.pts = endPts + packet.pts + 1;
+        LOGE("1111 read pkt, pts = %3" PRId64", ts = %f", packet.pts, packet.pts * av_q2d(ifmt_ctx2->streams[video_stream_index2]->time_base));
+        packet.pts = endPts + av_rescale_q(packet.pts, ifmt_ctx2->streams[video_stream_index2]->time_base, ifmt_ctx1->streams[video_stream_index1]->time_base) + 1;
+        LOGE("2222 read pkt, pts = %3" PRId64", ts = %f", packet.pts, packet.pts * av_q2d(ifmt_ctx2->streams[video_stream_index2]->time_base));
 //        packet.dts = endDts + packet.dts;
         stream_index = packet.stream_index;
         if (packet.stream_index == video_stream_index2) {
@@ -145,8 +144,7 @@ Java_com_watts_myapplication_FFmpegNativeUtils_mergeVideo(JNIEnv *env, jclass cl
                     LOGE("Error while receiving a frame from the decoder\n");
                     goto end;
                 }
-                LOGE("START FRAME filter_graph_merge, pts = %3" PRId64", beset effort ts = %3" PRId64"", frame->pts, frame->best_effort_timestamp);
-//                frame->pts = frame->best_effort_timestamp;
+                frame->pts = frame->best_effort_timestamp;
                 /* push the decoded frame into the filtergraph */
                 if (av_buffersrc_add_frame_flags(buffersrc_ctx_merge, frame, AV_BUFFERSRC_FLAG_KEEP_REF) < 0) {
                     LOGE("Error while feeding the filtergraph\n");
@@ -162,10 +160,7 @@ Java_com_watts_myapplication_FFmpegNativeUtils_mergeVideo(JNIEnv *env, jclass cl
                     if (ret < 0)
                         goto end;
                     filt_frame->pict_type = AV_PICTURE_TYPE_NONE;
-//                    filt_frame->pts = endPts + filt_frame->pts;
-                    LOGE("RECEIVE FRAME filter_graph_merge ,pts = %3" PRId64"", filt_frame->pts);
-//                    filt_frame->pkt_dts = endPts + filt_frame->pkt_dts;
-                    encode_write_frame(filt_frame, stream_index, NULL, endPts);
+                    encode_write_frame(filt_frame, stream_index, NULL, endPts, ifmt_ctx1->streams[video_stream_index1]->time_base);
                     av_frame_unref(filt_frame);
                 }
                 av_frame_unref(frame);
@@ -309,7 +304,12 @@ int open_output_file2(const char *filename){
             if (decCtx1->codec_type == AVMEDIA_TYPE_VIDEO) {
                 enc_ctx->height = decCtx1->height;
                 enc_ctx->width = decCtx1->width;
-                enc_ctx->sample_aspect_ratio = decCtx1->sample_aspect_ratio;
+                if (decCtx1->sample_aspect_ratio.num == 0){
+                    LOGE("can't get sample aspect ratio ,use default");
+                    enc_ctx->sample_aspect_ratio = av_make_q(1, 1);
+                } else {
+                    enc_ctx->sample_aspect_ratio = decCtx1->sample_aspect_ratio;
+                }
                 /* take first format from list of supported formats */
                 if (encoder->pix_fmts)
                     enc_ctx->pix_fmt = encoder->pix_fmts[0];
@@ -318,6 +318,13 @@ int open_output_file2(const char *filename){
                 /* video time_base can be set to whatever is handy and supported by encoder */
                 /* frames per second */
                 enc_ctx->time_base = av_inv_q(decCtx1->framerate);
+                if (enc_ctx->codec_id == AV_CODEC_ID_MPEG4 && (enc_ctx->time_base.den > 65535 || enc_ctx->time_base.num > 65536)){
+                    // the maximum admitted value for the timebase denominator is 65535
+                    LOGE("time_base error, time_base-den:%d,time_base:%d,", enc_ctx->time_base.den, enc_ctx->time_base.num);
+                    double f = enc_ctx->time_base.den / (double)enc_ctx->time_base.num;
+                    enc_ctx->time_base = av_make_q(65535/f ,65535);
+                    LOGE("New frame rate---time_base-den:%d,time_base:%d,", enc_ctx->time_base.den, enc_ctx->time_base.num);
+                }
 //                enc_ctx->framerate = dec_ctx->framerate;
 //                enc_ctx->bit_rate = dec_ctx->bit_rate;
             } else {
@@ -335,7 +342,7 @@ int open_output_file2(const char *filename){
             /* Third parameter can be used to pass settings to encoder */
             ret = avcodec_open2(enc_ctx, encoder, NULL);
             if (ret < 0) {
-                LOGE("Cannot open video encoder for stream #%u\n, error = %s", i, av_err2str(ret));
+                LOGE("Cannot open video encoder for codec #%s, error = %s", encoder->long_name, av_err2str(ret));
                 return ret;
             }
             ret = avcodec_parameters_from_context(out_stream->codecpar, enc_ctx);
@@ -474,7 +481,7 @@ int init_filters_merge(const char *filters_descr)
     return ret;
 }
 
-void encode_write_frame(AVFrame *inputFrame, unsigned int stream_index, int *got_frame, int64_t baseTs){
+void encode_write_frame(AVFrame *inputFrame, unsigned int stream_index, int *got_frame, int64_t baseTs, AVRational fromTB){
     int ret;
     AVPacket *pkt;
 
@@ -499,17 +506,10 @@ void encode_write_frame(AVFrame *inputFrame, unsigned int stream_index, int *got
         }
 
         (*pkt).stream_index = stream_index;
-        //TODO 时间scale 有问题，后续研究。 理论上应该做时间转换, AVFilter处理后， pkt 的pts 和 dts 会使用AvCodecContext的timebase，需rescale为AVStream的。
-//        LOGE("---------------");
-//        LOGE("START WRITE PACKAGE pts = %3" PRId64" - %d/%d",pkt->pts, encCtx->time_base.den, encCtx->time_base.num);
-//        av_packet_rescale_ts(pkt,
-//                             encCtx->time_base,
-//                             ofmt_ctx->streams[stream_index]->time_base);
-//        LOGE("START WRITE PACKAGE pts = %3" PRId64" - %d/%d",pkt->pts, ofmt_ctx->streams[stream_index]->time_base.den, ofmt_ctx->streams[stream_index]->time_base.num);
-
-//        pkt->pts = baseTs + pkt->pts;
-//        pkt->dts = baseTs + pkt->dts;
-        LOGE("write pkt pts = %3" PRId64"",pkt->pts);
+        av_packet_rescale_ts(pkt,
+                             fromTB,
+                             ofmt_ctx->streams[stream_index]->time_base);
+        LOGE("START WRITE PACKET,  pts = %3" PRId64" ，pkt.pts seconds = %f================================================", pkt->pts, pkt->pts * av_q2d(ofmt_ctx->streams[stream_index]->time_base));
         ret = av_interleaved_write_frame(ofmt_ctx, pkt);
         if(ret < 0){
             LOGE("write pkt fail\n");
