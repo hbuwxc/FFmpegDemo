@@ -12,6 +12,7 @@ extern "C" {
 }
 
 #define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, "MEDIA_CORE", __VA_ARGS__)
+#define LOG_RESOURCE(...) __android_log_print(ANDROID_LOG_ERROR, "MEDIA_RESOURCE", __VA_ARGS__)
 
 static AVFormatContext *ifmt_ctx;
 static AVFormatContext *ofmt_ctx;
@@ -21,7 +22,7 @@ AVFilterContext *buffersink_ctx;
 AVFilterContext *buffersrc_ctx;
 AVFilterGraph *filter_graph;
 static int video_stream_index = -1;
-static bool enableCut = true;
+static bool enableCut = false;
 int64_t pts_start = -1;
 int64_t dts_start = -1;
 
@@ -37,6 +38,8 @@ void encode(AVCodecContext *enc_ctx, AVFrame *frame, AVPacket *pkt,
                    FILE *outfile)
 ;
 
+void log_callback_test2(void *ptr, int level, const char *fmt, va_list vl);
+
 extern "C" JNIEXPORT jstring JNICALL
 Java_com_watts_myapplication_MainActivity_stringFromJNI(
         JNIEnv* env,
@@ -44,7 +47,7 @@ Java_com_watts_myapplication_MainActivity_stringFromJNI(
     std::string hello = "Hello from C++";
     LOGE("this is ndk log.---%s",avcodec_configuration());
 
-
+    av_log_set_callback(log_callback_test2);
     return env->NewStringUTF(hello.c_str());
 }
 
@@ -148,7 +151,7 @@ Java_com_watts_myapplication_FFmpegNativeUtils_filterVideo(JNIEnv *env, jclass c
                 while (1) {
                     filt_frame = av_frame_alloc();
                     ret = av_buffersink_get_frame(buffersink_ctx, filt_frame);
-                    LOGE("RECEIVE FRAME filter_graph ,ret = %d，%d,%d", ret, AVERROR(EAGAIN), AVERROR_EOF);
+                    LOGE("RECEIVE FRAME filter_graph ,ret = %d，pts=%3" PRId64"", ret, filt_frame->pts);
                     if (ret == AVERROR(EAGAIN) || ret == AVERROR_EOF)
                         break;
                     if (ret < 0)
@@ -266,7 +269,12 @@ int open_output_file(const char *filename)
             if (dec_ctx->codec_type == AVMEDIA_TYPE_VIDEO) {
                 enc_ctx->height = dec_ctx->height;
                 enc_ctx->width = dec_ctx->width;
-                enc_ctx->sample_aspect_ratio = dec_ctx->sample_aspect_ratio;
+                if (dec_ctx->sample_aspect_ratio.num == 0){
+                    LOGE("can't get sample aspect ratio ,use default");
+                    enc_ctx->sample_aspect_ratio = av_make_q(1, 1);
+                } else {
+                    enc_ctx->sample_aspect_ratio = dec_ctx->sample_aspect_ratio;
+                }
                 /* take first format from list of supported formats */
                 if (encoder->pix_fmts)
                     enc_ctx->pix_fmt = encoder->pix_fmts[0];
@@ -275,6 +283,14 @@ int open_output_file(const char *filename)
                 /* video time_base can be set to whatever is handy and supported by encoder */
                 /* frames per second */
                 enc_ctx->time_base = av_inv_q(dec_ctx->framerate);
+                if (enc_ctx->codec_id == AV_CODEC_ID_MPEG4 && (enc_ctx->time_base.den > 65535 || enc_ctx->time_base.num > 65536)){
+                    // the maximum admitted value for the timebase denominator is 65535
+                    LOGE("time_base error, time_base-den:%d,time_base:%d,", enc_ctx->time_base.den, enc_ctx->time_base.num);
+                    double f = enc_ctx->time_base.den / (double)enc_ctx->time_base.num;
+                    enc_ctx->time_base = av_make_q(65535/f ,65535);
+                    LOGE("New frame rate---time_base-den:%d,time_base:%d,", enc_ctx->time_base.den, enc_ctx->time_base.num);
+                }
+                LOGE("width = %d, height = %d, sample_aspect_ratio.den=%d, sample_aspect_ratio.num=%d, pix_fmt= %d, timebase.den=%d, timebase.num=%d", enc_ctx->width, enc_ctx->height, enc_ctx->sample_aspect_ratio.den, enc_ctx->sample_aspect_ratio.num, enc_ctx->pix_fmt, enc_ctx->time_base.den, enc_ctx->time_base.num);
 //                enc_ctx->framerate = dec_ctx->framerate;
 //                enc_ctx->bit_rate = dec_ctx->bit_rate;
             } else {
@@ -292,7 +308,7 @@ int open_output_file(const char *filename)
             /* Third parameter can be used to pass settings to encoder */
             ret = avcodec_open2(enc_ctx, encoder, NULL);
             if (ret < 0) {
-                LOGE("Cannot open video encoder for stream #%u\n, error = %s", i, av_err2str(ret));
+                LOGE("Cannot open video encoder for codec #%s, error = %s", encoder->long_name, av_err2str(ret));
                 return ret;
             }
             ret = avcodec_parameters_from_context(out_stream->codecpar, enc_ctx);
@@ -437,25 +453,22 @@ void encode_write_frame(AVFrame *inputFrame, unsigned int stream_index, int *got
     pkt = av_packet_alloc();
     if (!pkt)
         return;
-    LOGE("START FRAME ENCODE pts = %3" PRId64" - %d/%d",inputFrame->pts, decCtx->time_base.den, decCtx->time_base.num);
+    LOGE("START FRAME ENCODE pts = %3" PRId64" ，seconds = %d",inputFrame->pts, inputFrame->pts * av_q2d(ifmt_ctx->streams[video_stream_index]->time_base));
     ret = avcodec_send_frame(encCtx, inputFrame);
     while (ret >= 0) {
         ret = avcodec_receive_packet(encCtx, pkt);
         if (ret == AVERROR(EAGAIN) || ret == AVERROR_EOF) {
-            LOGE("Error during encoding %s",av_err2str(ret));
+            LOGE("FAIL during encoding %s",av_err2str(ret));
             return;
         } else if (ret < 0) {
             LOGE("Error during encoding %s",av_err2str(ret));
         }
 
         (*pkt).stream_index = stream_index;
-        //TODO 时间scale 有问题，后续研究。 理论上应该做时间转换, AVFilter处理后， pkt 的pts 和 dts 会使用AvCodecContext的timebase，需rescale为AVStream的。
-//        LOGE("---------------");
-//        LOGE("START WRITE PACKAGE pts = %3" PRId64" - %d/%d",pkt->pts, encCtx->time_base.den, encCtx->time_base.num);
-//        av_packet_rescale_ts(pkt,
-//                             encCtx->time_base,
-//                             ofmt_ctx->streams[stream_index]->time_base);
-//        LOGE("START WRITE PACKAGE pts = %3" PRId64" - %d/%d",pkt->pts, ofmt_ctx->streams[stream_index]->time_base.den, ofmt_ctx->streams[stream_index]->time_base.num);
+        av_packet_rescale_ts(pkt,
+                             ifmt_ctx->streams[video_stream_index]->time_base,
+                             ofmt_ctx->streams[stream_index]->time_base);
+        LOGE("START WRITE PACKET,  pts = %3" PRId64" ，pkt.pts seconds = %d", pkt->pts, pkt->pts * av_q2d(ofmt_ctx->streams[stream_index]->time_base));
         ret = av_interleaved_write_frame(ofmt_ctx, pkt);
         if(ret < 0){
             LOGE("write pkt fail\n");
@@ -464,4 +477,17 @@ void encode_write_frame(AVFrame *inputFrame, unsigned int stream_index, int *got
     }
 
     av_packet_free(&pkt);
+}
+
+void log_callback_test2(void *ptr, int level, const char *fmt, va_list vl)
+{
+    va_list vl2;
+    char *line = static_cast<char *>(malloc(1280 * sizeof(char)));
+    static int print_prefix = 1;
+    va_copy(vl2, vl);
+    av_log_format_line(ptr, level, fmt, vl2, line, 1280, &print_prefix);
+    va_end(vl2);
+    line[1279] = '\0';
+    LOG_RESOURCE("%s", line);
+    free(line);
 }
