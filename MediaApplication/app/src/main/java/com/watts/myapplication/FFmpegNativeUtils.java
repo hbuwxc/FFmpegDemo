@@ -10,4 +10,5 @@ public class FFmpegNativeUtils {
     public native static void generateVideo(String path);
     public native static void transcodeVideo(String inputPath, String outputPath);
     public native static void mergeVideo(String videoPath1, String videoPath2, String outputVideo, String filter);
+    public native static void muxVideo(String videoPath, String mp3Path, String outputPath);
 }

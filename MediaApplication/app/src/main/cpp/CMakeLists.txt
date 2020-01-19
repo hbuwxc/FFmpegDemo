@@ -21,6 +21,7 @@ add_library( # Sets the name of the library.
             encode_video.c
         transcoding.c
         merge_video.cpp
+        mux_video.cpp
         )
 
 #ffmpeg library

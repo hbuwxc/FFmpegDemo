@@ -23,10 +23,6 @@ import java.util.concurrent.locks.ReentrantLock;
 public class MainActivity extends AppCompatActivity {
     private static final String TAG = MainActivity.class.getSimpleName();
 
-    private static final int REUQEST_PERMISSION_CAPTURE = 100;
-
-    private final Lock mImageReaderLock = new ReentrantLock(true);
-
     // Used to load the 'native-lib' library on application startup.
     static {
         System.loadLibrary("avcodec");
@@ -43,6 +39,8 @@ public class MainActivity extends AppCompatActivity {
     String filterVideoPath;
     String filterImagePath;
     String mergeOutputPath;
+    String mp3Path;
+    String videoWithMp3Path;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -65,6 +63,8 @@ public class MainActivity extends AppCompatActivity {
         filterVideoPath = Environment.getExternalStorageDirectory().getAbsolutePath() + File.separator + "/111/filter_video.mp4";
         filterImagePath = Environment.getExternalStorageDirectory().getAbsolutePath() + File.separator + "/111/test.png";
         mergeOutputPath = Environment.getExternalStorageDirectory().getAbsolutePath() + File.separator + "/111/merge_output.mp4";
+        mp3Path = Environment.getExternalStorageDirectory().getAbsolutePath() + File.separator + "/111/eason.aac";
+        videoWithMp3Path = Environment.getExternalStorageDirectory().getAbsolutePath() + File.separator + "/111/video_with_mp3.mp4";
         File f = new File(demoVideoPath);
         if (!f.exists()) {
             copyAssets(this, "demo.mp4", demoVideoPath);
@@ -75,7 +75,10 @@ public class MainActivity extends AppCompatActivity {
             copyAssets(this, "test.png", filterImagePath);
         }
 
-        createNewFile(mergeOutputPath);
+        File mp3File = new File(mp3Path);
+        if (!mp3File.exists()){
+            copyAssets(this, "eason.aac", mp3Path);
+        }
 
         mVideoView.setVideoPath(demoVideoPath);
         mVideoView.setMediaController(new MediaController(this));
@@ -171,7 +174,13 @@ public class MainActivity extends AppCompatActivity {
     }
 
     public void mergeVideo(View view) {
+        createNewFile(mergeOutputPath);
         FFmpegNativeUtils.mergeVideo(demoVideoPath, filterVideoPath, mergeOutputPath, generateFilterGraph(100));
 
+    }
+
+    public void muxVideo(View view) {
+        createNewFile(videoWithMp3Path);
+        FFmpegNativeUtils.muxVideo(filterVideoPath, mp3Path, videoWithMp3Path);
     }
 }
