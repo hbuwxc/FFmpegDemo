@@ -22,7 +22,6 @@ static AVFormatContext *mp3FormatContext;
 static AVFormatContext *outputFormatContext;
 static AVCodecContext *mp4Context;
 static AVCodecContext *mp3Context;
-static AVCodecContext *outputContext;
 static int mp4Index = -1;
 static int mp3Index = -1;
 
@@ -85,10 +84,16 @@ Java_com_watts_myapplication_FFmpegNativeUtils_muxVideo(JNIEnv *env, jclass claz
         LOGE("video packaet pts = %f, audio packet pts = %f",videoPacket.dts * av_q2d(mp4FormatContext->streams[mp4Index]->time_base), audioPacket.dts * av_q2d(mp3FormatContext->streams[mp3Index]->time_base));
         if (av_compare_ts(videoPacket.dts, mp4FormatContext->streams[mp4Index]->time_base, audioPacket.dts, mp3FormatContext->streams[mp3Index]->time_base) < 0){
             // video
+            if (videoPacket.flags & AV_PKT_FLAG_KEY){
+                LOGE("is key frame %d", videoPacket.flags);
+            } else {
+                LOGE("is not key frame %d", videoPacket.flags);
+            }
             videoPacket.stream_index = 0;
             av_packet_rescale_ts(&videoPacket,
                                  mp4FormatContext->streams[mp4Index]->time_base,
                                  outputFormatContext->streams[0]->time_base);
+            LOGE("____________VIDEO_PTS  = %f", videoPacket.pts * av_q2d(outputFormatContext->streams[0]->time_base));
             lastVideoDts = videoPacket.dts;
             ret = av_interleaved_write_frame(outputFormatContext, &videoPacket);
             if(ret < 0){
@@ -122,7 +127,8 @@ Java_com_watts_myapplication_FFmpegNativeUtils_muxVideo(JNIEnv *env, jclass claz
 int open_input_file1(const char *mp4File, const char *mp3File)
 {
     int ret;
-    AVCodec *dec;
+    AVCodec *video_dec;
+    AVCodec *audio_dec;
 
     if ((ret = avformat_open_input(&mp4FormatContext, mp4File, NULL, NULL)) < 0) {
         LOGE("Cannot open input file\n");
@@ -135,7 +141,7 @@ int open_input_file1(const char *mp4File, const char *mp3File)
     }
 
     /* select the video stream */
-    ret = av_find_best_stream(mp4FormatContext, AVMEDIA_TYPE_VIDEO, -1, -1, &dec, 0);
+    ret = av_find_best_stream(mp4FormatContext, AVMEDIA_TYPE_VIDEO, -1, -1, &video_dec, 0);
     if (ret < 0) {
         LOGE("Cannot find a video stream in the input file\n");
         return ret;
@@ -143,14 +149,14 @@ int open_input_file1(const char *mp4File, const char *mp3File)
     mp4Index = ret;
 
     /* create decoding context */
-    mp4Context = avcodec_alloc_context3(dec);
+    mp4Context = avcodec_alloc_context3(video_dec);
     if (!mp4Context)
         return AVERROR(ENOMEM);
     avcodec_parameters_to_context(mp4Context, mp4FormatContext->streams[mp4Index]->codecpar);
     mp4Context->framerate = av_guess_frame_rate(mp4FormatContext, mp4FormatContext->streams[mp4Index], NULL);
 
     /* init the video decoder */
-    if ((ret = avcodec_open2(mp4Context, dec, NULL)) < 0) {
+    if ((ret = avcodec_open2(mp4Context, video_dec, NULL)) < 0) {
         LOGE("Cannot open video decoder\n");
         return ret;
     }
@@ -168,7 +174,7 @@ int open_input_file1(const char *mp4File, const char *mp3File)
     }
 
     /* select the video stream */
-    ret = av_find_best_stream(mp3FormatContext, AVMEDIA_TYPE_AUDIO, -1, -1, &dec, 0);
+    ret = av_find_best_stream(mp3FormatContext, AVMEDIA_TYPE_AUDIO, -1, -1, &audio_dec, 0);
     if (ret < 0) {
         LOGE("Cannot find a video stream in the input file\n");
         return ret;
@@ -176,14 +182,14 @@ int open_input_file1(const char *mp4File, const char *mp3File)
     mp3Index = ret;
 
     /* create decoding context */
-    mp3Context = avcodec_alloc_context3(dec);
+    mp3Context = avcodec_alloc_context3(audio_dec);
     if (!mp3Context)
         return AVERROR(ENOMEM);
     avcodec_parameters_to_context(mp3Context, mp3FormatContext->streams[mp3Index]->codecpar);
     mp3Context->framerate = av_guess_frame_rate(mp3FormatContext, mp3FormatContext->streams[mp3Index], NULL);
 
     /* init the video decoder */
-    if ((ret = avcodec_open2(mp3Context, dec, NULL)) < 0) {
+    if ((ret = avcodec_open2(mp3Context, audio_dec, NULL)) < 0) {
         LOGE("Cannot open video decoder\n");
         return ret;
     }
@@ -294,7 +300,6 @@ int open_output_file3(const char *filename){
             }
 
             out_stream->time_base = enc_ctx->time_base;
-            outputContext = enc_ctx;
         } else if (mp4Context->codec_type == AVMEDIA_TYPE_UNKNOWN) {
             LOGE("Elementary stream #%d is of unknown type, cannot proceed\n", i);
             return AVERROR_INVALIDDATA;

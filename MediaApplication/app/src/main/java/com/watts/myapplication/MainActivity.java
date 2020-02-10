@@ -181,6 +181,6 @@ public class MainActivity extends AppCompatActivity {
 
     public void muxVideo(View view) {
         createNewFile(videoWithMp3Path);
-        FFmpegNativeUtils.muxVideo(filterVideoPath, mp3Path, videoWithMp3Path);
+        FFmpegNativeUtils.muxVideo(mergeOutputPath, mp3Path, videoWithMp3Path);
     }
 }
