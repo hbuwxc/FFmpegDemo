@@ -270,7 +270,9 @@ int open_output_file3(const char *filename){
                     // the maximum admitted value for the timebase denominator is 65535
                     LOGE("time_base error, time_base-den:%d,time_base:%d,", enc_ctx->time_base.den, enc_ctx->time_base.num);
                     double f = enc_ctx->time_base.den / (double)enc_ctx->time_base.num;
-                    enc_ctx->time_base = av_make_q(65535/f ,65535);
+//                    enc_ctx->time_base = av_make_q(65535/f ,65535);`
+                    // with a permernant value , not support on upper or #time_increment_bits 15 is invalid in relation to the current bitstream, this is likely caused by a missing VOL header
+                    enc_ctx->time_base = av_make_q(2504, 65535);
                     LOGE("New frame rate---time_base-den:%d,time_base:%d,", enc_ctx->time_base.den, enc_ctx->time_base.num);
                 }
 //                enc_ctx->framerate = dec_ctx->framerate;
